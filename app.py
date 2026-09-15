@@ -41,12 +41,12 @@ if "is_paused" not in st.session_state:
     st.session_state.is_paused = False
 
 
-# ==================== 3. 缓存模型训练与SHAP计算（含防缓存残缺修复） ====================
+# ==================== 3. 缓存模型训练与SHAP计算（已删除死循环逻辑） ====================
 @st.cache_resource(show_spinner="正在初始化模型与数据...")
 def load_and_train_models():
     """模拟历史数据，训练4个模型并计算SHAP值，只在首次加载时消耗内存"""
     np.random.seed(42)
-    n_samples = 200
+    n_samples = 200  # 极小样本量，保证内存绝对安全
 
     X = pd.DataFrame({
         "进水流量": np.random.normal(50000, 5000, n_samples),
@@ -89,13 +89,6 @@ def load_and_train_models():
         explainer = shap.Explainer(model.predict, X_train)
         shap_values = explainer(X_test[:50])
         shap_values_dict[name] = shap_values
-
-    # ============ 新增：防止云端缓存残缺的兜底逻辑 ============
-    if "Linear" not in trained_models:
-        st.warning("检测到云端缓存异常，正在重新初始化模型...")
-        st.cache_resource.clear()
-        return load_and_train_models()
-    # =======================================================
 
     return trained_models, metrics, shap_values_dict, X, y_fm, X_test, y_test
 
@@ -182,6 +175,14 @@ def show_main():
                 st.session_state.is_paused = False
                 st.session_state.last_run_time = time.time()
                 st.toast("✅ 数据已清空，系统已重置！")
+                st.rerun()
+
+            # 新增：一键清空缓存按钮（救急专用）
+            if st.button("🔄 强制清空缓存并重启", use_container_width=True):
+                st.cache_resource.clear()
+                st.session_state.history_data = pd.DataFrame(columns=st.session_state.history_data.columns)
+                st.session_state.row_counter = 0
+                st.session_state.predicted = False
                 st.rerun()
 
         st.divider()

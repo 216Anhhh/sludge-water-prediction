@@ -6,3 +6,4 @@ streamlit-autorefresh
 scikit-learn
 xgboost
 shap
+openpyxl

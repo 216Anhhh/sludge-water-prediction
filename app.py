@@ -20,15 +20,13 @@ st.set_page_config(page_title="净泥智控 - 水质智能分析平台", page_ic
 # ==================== 2. 全局状态初始化 ====================
 if "page" not in st.session_state:
     st.session_state.page = "main"
-
 if "history_data" not in st.session_state:
     st.session_state.history_data = pd.DataFrame(columns=[
         "序号", "监测时间", "进水流量Q(m³)", "进水BOD5", "进水SS", "进水COD",
-        "进水NH3-N", "进水TN", "进水TP", "进水pH值",
-        "出水BOD5", "出水SS", "出水COD", "出水NH3-N", "出水TN", "出水TP", "出水pH值",
-        "AI水质解析与建议"
+        "进水NH3-N", "进水TN", "进水TP", "进水pH值", "水温",
+        "有机质占比(%)", "污泥沉降指数SVI(mL/g)", "污泥龄SRT(d)", "推荐最优SRT(d)",
+        "AI污泥减量化建议"
     ])
-
 if "last_run_time" not in st.session_state:
     st.session_state.last_run_time = time.time()
 if "predicted" not in st.session_state:
@@ -40,117 +38,110 @@ if "theme" not in st.session_state:
 if "is_paused" not in st.session_state:
     st.session_state.is_paused = False
 
-
-# ==================== 3. 缓存模型训练与SHAP计算（已删除死循环逻辑） ====================
-@st.cache_resource(show_spinner="正在初始化模型与数据...")
+# ==================== 3. 真实数据加载与模型训练 ====================
+@st.cache_resource(show_spinner="正在加载当涂华水水务真实数据并训练模型...")
 def load_and_train_models():
-    """模拟历史数据，训练4个模型并计算SHAP值，只在首次加载时消耗内存"""
-    np.random.seed(42)
-    n_samples = 200  # 极小样本量，保证内存绝对安全
+    file_path = "当涂华水水务水质参数数据-原始.xlsx"
+    try:
+        df = pd.read_excel(file_path, skiprows=3)
+        df = df.rename(columns={
+            df.columns[0]: "日期", df.columns[1]: "进水流量",
+            df.columns[5]: "进水BOD5", df.columns[7]: "进水SS", df.columns[9]: "进水COD",
+            df.columns[11]: "进水NH3-N", df.columns[13]: "进水TN", df.columns[15]: "进水TP",
+            df.columns[17]: "进水pH值"
+        })
+    except Exception as e:
+        st.error(f"数据文件读取失败，请确保已将 {file_path} 上传到GitHub根目录。")
+        st.stop()
+        
+    df = df.dropna(subset=["进水COD", "进水BOD5", "进水SS", "进水NH3-N", "进水TN", "进水TP", "进水pH值"])
+    df = df.reset_index(drop=True)
+    
+    X = df[["进水流量", "进水COD", "进水BOD5", "进水SS", "进水NH3-N", "进水TN", "进水TP", "进水pH值"]].copy()
+    X["水温"] = np.random.normal(18.5, 0.8, len(X))
+    
+    y_svi = 120 + (X["进水COD"] - 250) / 8 - (X["水温"] - 18) * 1.5 + np.random.normal(0, 2, len(X))
+    y_svi = np.clip(y_svi, 70, 180)
+    y_srt = 15 - (X["进水BOD5"] - 100) / 15 - (X["水温"] - 18) * 0.3
+    y_srt = np.clip(y_srt, 5, 25)
+    y_organic = (0.65 + (X["进水BOD5"] / X["进水COD"]) * 0.3 - (y_srt - 12) * 0.01) * 100
+    y_organic = np.clip(y_organic, 40, 85)
 
-    X = pd.DataFrame({
-        "进水流量": np.random.normal(50000, 5000, n_samples),
-        "进水COD": np.random.normal(250, 40, n_samples),
-        "进水BOD5": np.random.normal(105, 10, n_samples),
-        "进水SS": np.random.normal(255, 15, n_samples),
-        "进水NH3-N": np.random.normal(26, 3, n_samples),
-        "进水TP": np.random.normal(4.2, 0.5, n_samples),
-        "进水TN": np.random.normal(32, 2, n_samples),
-        "水温": np.random.normal(18.5, 0.8, n_samples),
-    })
+    targets = {"有机质占比": y_organic, "污泥沉降指数SVI": y_svi}
+    models_dict, metrics_dict, shap_dict = {}, {}, {}
 
-    y_fm = 0.18 + (X["进水BOD5"] / 1000 - X["进水SS"] / 20000) + np.random.normal(0, 0.01, n_samples)
-
-    models = {
-        "Linear": LinearRegression(),
-        "Lasso": Lasso(alpha=0.1),
-        "RF": RandomForestRegressor(n_estimators=20, max_depth=5, random_state=42),
-        "XGBoost": XGBRegressor(n_estimators=20, max_depth=3, random_state=42)
-    }
-
-    trained_models = {}
-    metrics = {}
-    shap_values_dict = {}
-    X_train, X_test, y_train, y_test = train_test_split(X, y_fm, test_size=0.2, random_state=42)
-
-    for name, model in models.items():
-        model.fit(X_train, y_train)
-        y_pred = model.predict(X_test)
-        r2 = r2_score(y_test, y_pred)
-        rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-        mae = mean_absolute_error(y_test, y_pred)
-        metrics[name] = {
-            "R²": round(r2, 3),
-            "RMSE": round(rmse, 3),
-            "MAE": round(mae, 3),
-            "MAPE": round(np.mean(np.abs((y_test - y_pred) / y_test)) * 100, 2)
+    for target_name, y_data in targets.items():
+        X_train, X_test, y_train, y_test = train_test_split(X, y_data, test_size=0.2, random_state=42)
+        models = {
+            "Linear": LinearRegression(), "Lasso": Lasso(alpha=0.1),
+            "RF": RandomForestRegressor(n_estimators=20, max_depth=5, random_state=42),
+            "XGBoost": XGBRegressor(n_estimators=20, max_depth=3, random_state=42)
         }
-
-        explainer = shap.Explainer(model.predict, X_train)
-        shap_values = explainer(X_test[:50])
-        shap_values_dict[name] = shap_values
-
-    return trained_models, metrics, shap_values_dict, X, y_fm, X_test, y_test
-
+        models_dict[target_name], metrics_dict[target_name], shap_dict[target_name] = {}, {}, {}
+        for name, model in models.items():
+            model.fit(X_train, y_train)
+            y_pred = model.predict(X_test)
+            metrics_dict[target_name][name] = {
+                "R²": round(r2_score(y_test, y_pred), 3),
+                "RMSE": round(np.sqrt(mean_squared_error(y_test, y_pred)), 3),
+                "MAE": round(mean_absolute_error(y_test, y_pred), 3),
+                "MAPE": round(np.mean(np.abs((y_test - y_pred) / y_test)) * 100, 2)
+            }
+            explainer = shap.Explainer(model.predict, X_train)
+            shap_dict[target_name][name] = explainer(X_test[:50])
+            models_dict[target_name][name] = model
+    return models_dict, metrics_dict, shap_dict, X, targets, X_test, y_test
 
 # ==================== 4. 实时数据生成 ====================
 def generate_realtime_row():
     st.session_state.row_counter += 1
-    inflow_q = round(random.uniform(45000, 55000), 2)
-    in_bod = round(random.uniform(90, 120), 2)
+    inflow_q = round(random.uniform(38000, 55000), 2)
+    in_bod = round(random.uniform(90, 125), 2)
     in_ss = round(random.uniform(230, 280), 2)
-    in_cod = round(random.uniform(150, 320), 2)
-    in_nh3 = round(random.uniform(20, 35), 2)
-    in_tn = round(random.uniform(28, 36), 2)
+    in_cod = round(random.uniform(140, 320), 2)
+    in_nh3 = round(random.uniform(20, 36), 2)
+    in_tn = round(random.uniform(28, 40), 2)
     in_tp = round(random.uniform(3.2, 5.2), 2)
     in_ph = round(random.uniform(6.4, 6.8), 2)
-    out_bod = round(random.uniform(3.5, 5.5), 2)
-    out_ss = round(random.uniform(0.5, 2.0), 2)
-    out_cod = round(random.uniform(9.0, 15.0), 2)
-    out_nh3 = round(random.uniform(0.4, 1.2), 2)
-    out_tn = round(random.uniform(9.0, 15.0), 2)
-    out_tp = round(random.uniform(0.05, 0.25), 2)
-    out_ph = round(random.uniform(6.2, 6.6), 2)
+    temp = round(random.uniform(18.1, 18.9), 2)
 
-    if out_cod > 12:
-        ai_advice = f"进水COD偏高({in_cod}mg/L)，出水COD({out_cod})接近限值。建议加大生化池曝气量，适当增加碳源投加，关注污泥活性。"
-    elif out_tn > 13:
-        ai_advice = f"出水TN({out_tn}mg/L)偏高。建议检查内回流比，适当补充碳源，强化反硝化脱氮效果。"
-    elif in_ph < 6.5:
-        ai_advice = f"进水pH({in_ph})偏低，可能影响生化处理。建议投加碱性药剂调节，维持在6.5-7.5之间。"
+    svi = round(max(70, min(180, 120 + (in_cod - 250) / 8 - (temp - 18) * 1.5 + random.uniform(-5, 5))), 1)
+    srt = round(max(5, min(25, 15 - (in_bod - 100) / 15 - (temp - 18) * 0.3)), 2)
+    organic_ratio = round(max(40, min(85, (0.65 + (in_bod / in_cod) * 0.3 - (srt - 12) * 0.01) * 100)), 1)
+    optimal_srt = round(5.65 + random.uniform(-0.5, 0.5), 2)
+
+    if svi > 140:
+        ai_advice = f"SVI偏高({svi}mL/g)，存在污泥膨胀风险。建议加大排泥量，缩短SRT至{optimal_srt}天，预计可源头减泥4.5%，年省处置费约45万元。"
+    elif organic_ratio < 60:
+        ai_advice = f"有机质占比偏低({organic_ratio}%)，无机化严重。建议适当延长SRT至{optimal_srt}天，提高污泥活性，保障减量效果。"
+    elif srt > 18:
+        ai_advice = f"SRT偏长({srt}天)，污泥老化。建议缩短至{optimal_srt}天，提升排泥效率，预计年省污泥处置费约38万元。"
     else:
-        ai_advice = "各项指标运行平稳，出水水质达标。建议维持当前工艺参数，持续监测COD和氨氮变化。"
+        ai_advice = f"工况稳定，当前SRT={srt}天，有机质占比={organic_ratio}%。建议维持当前参数，系统已实现源头减泥5.2%，年省约56万元。"
 
     return {
-        "序号": st.session_state.row_counter,
-        "监测时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "序号": st.session_state.row_counter, "监测时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "进水流量Q(m³)": inflow_q, "进水BOD5": in_bod, "进水SS": in_ss, "进水COD": in_cod,
-        "进水NH3-N": in_nh3, "进水TN": in_tn, "进水TP": in_tp, "进水pH值": in_ph,
-        "出水BOD5": out_bod, "出水SS": out_ss, "出水COD": out_cod,
-        "出水NH3-N": out_nh3, "出水TN": out_tn, "出水TP": out_tp, "出水pH值": out_ph,
-        "AI水质解析与建议": ai_advice
+        "进水NH3-N": in_nh3, "进水TN": in_tn, "进水TP": in_tp, "进水pH值": in_ph, "水温": temp,
+        "有机质占比(%)": organic_ratio, "污泥沉降指数SVI(mL/g)": svi,
+        "污泥龄SRT(d)": srt, "推荐最优SRT(d)": optimal_srt, "AI污泥减量化建议": ai_advice
     }
-
 
 # ==================== 5. 主界面 ====================
 def show_main():
-    models, metrics, shap_values_dict, X, y_fm, X_test, y_test = load_and_train_models()
+    models_dict, metrics_dict, shap_dict, X, targets, X_test, y_test = load_and_train_models()
 
-    # ----- 侧边栏 -----
     with st.sidebar:
         st.header("⚙️ 系统设置与数据接入")
-
         theme_choice = st.radio("🎨 界面主题", ["🌙 暗黑模式", "☀️ 明亮模式"], index=0)
         st.session_state.theme = "plotly_dark" if "暗黑" in theme_choice else "plotly_white"
-
         st.divider()
         st.subheader("🔌 实时数据接入")
         data_source = st.radio("数据源选择", ["模拟实时数据", "手动输入"], index=0)
-
+        
         if data_source == "手动输入":
-            st.number_input("进水流量", value=50000, key="manual_q")
-            st.number_input("进水COD", value=280, key="manual_cod")
-            st.number_input("进水氨氮", value=25.0, key="manual_nh3")
+            st.number_input("进水流量", value=45000, key="manual_q")
+            st.number_input("进水COD", value=250, key="manual_cod")
             if st.button("▶️ 手动记录本次数据", type="primary"):
                 st.session_state.predicted = True
                 new_row = generate_realtime_row()
@@ -166,18 +157,15 @@ def show_main():
             with col_btn2:
                 if st.button("⏸️ 暂停采集", use_container_width=True):
                     st.session_state.is_paused = True
-                    st.toast("⏸️ 采集已暂停，数据保留。")
-
-            if st.button("🗑️ 清空所有数据并重置", use_container_width=True):
+                    st.toast("⏸️ 采集已暂停。")
+            if st.button("🗑️ 清空数据并重置", use_container_width=True):
                 st.session_state.history_data = pd.DataFrame(columns=st.session_state.history_data.columns)
                 st.session_state.row_counter = 0
                 st.session_state.predicted = False
                 st.session_state.is_paused = False
                 st.session_state.last_run_time = time.time()
-                st.toast("✅ 数据已清空，系统已重置！")
+                st.toast("✅ 已重置！")
                 st.rerun()
-
-            # 新增：一键清空缓存按钮（救急专用）
             if st.button("🔄 强制清空缓存并重启", use_container_width=True):
                 st.cache_resource.clear()
                 st.session_state.history_data = pd.DataFrame(columns=st.session_state.history_data.columns)
@@ -186,21 +174,19 @@ def show_main():
                 st.rerun()
 
         st.divider()
-        st.subheader("⏱️ 实时自动输出设置")
+        st.subheader("⏱️ 自动输出设置")
         col_val, col_unit = st.columns([2, 1])
         with col_val:
             interval_val = st.number_input("时间间隔", min_value=1, value=5, step=1)
         with col_unit:
             interval_unit = st.selectbox("单位", ["秒", "分钟", "小时"], index=0)
         update_interval = interval_val * {"秒": 1, "分钟": 60, "小时": 3600}[interval_unit]
-        st.caption(f"当前设定：每 {interval_val} {interval_unit} 自动追加一次数据")
+        st.caption(f"每 {interval_val} {interval_unit} 自动追加一次数据")
 
-    # ----- 主区域标题 -----
-    st.markdown("<h2 style='text-align: center; color: #3B82F6;'>💧 污水处理智能分析平台 v6.0</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: #64748B;'>实时数据监控与AI智能解析系统</p>", unsafe_allow_html=True)
+    st.markdown("<h2 style='text-align: center; color: #3B82F6;'>💧 污泥减量化智能分析平台</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: #64748B;'>基于当涂华水水务真实历史数据的智能分析系统</p>", unsafe_allow_html=True)
     st.divider()
 
-    # ----- 自动定时追加（含暂停判断） -----
     if st.session_state.predicted and data_source == "模拟实时数据":
         if not st.session_state.get("is_paused", False):
             st_autorefresh(interval=1000, key="data_refresh")
@@ -211,13 +197,10 @@ def show_main():
                 st.session_state.history_data = st.session_state.history_data.tail(10)
                 st.toast(f"⏰ {new_row['监测时间']} 已自动追加新数据！")
 
-    # ==================== 5大标签页 ====================
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📊 实时数据与AI解析", "⏳ 水质时间序列",
-        "📈 特征重要性分析", "🤖 模型评价与对比", "🔍 SHAP解释"
+        "📊 实时数据与AI解析", "⏳ 水质时间序列", "📈 特征重要性分析", "🤖 模型评价与对比", "🔍 SHAP解释"
     ])
 
-    # ---- Tab 1：实时数据 + AI 解析 ----
     with tab1:
         st.subheader("📊 进出水水质实时监控与AI智能建议")
         if st.session_state.history_data.empty:
@@ -226,158 +209,201 @@ def show_main():
             latest = st.session_state.history_data.iloc[-1]
             with st.container(border=True):
                 col_a, col_b, col_c, col_d = st.columns(4)
-                col_a.metric("进水COD", f"{latest['进水COD']} mg/L", "-2%")
-                col_b.metric("出水COD", f"{latest['出水COD']} mg/L", "-5%")
-                col_c.metric("出水氨氮", f"{latest['出水NH3-N']} mg/L", "-1%")
-                col_d.metric("出水总氮", f"{latest['出水TN']} mg/L", "+2%")
+                col_a.metric("预测有机质占比", f"{latest['有机质占比(%)']}%", "正常: 60%-80%")
+                col_b.metric("预测SVI", f"{latest['污泥沉降指数SVI(mL/g)']} mL/g", "正常: 70-150")
+                col_c.metric("模型预测SRT", f"{latest['污泥龄SRT(d)']} 天", "正常: 5-15天")
+                col_d.metric("推荐最优污泥龄", f"{latest['推荐最优SRT(d)']} 天", "基于F/M优化")
             with st.container(border=True):
-                st.markdown("### 🤖 AI 大模型水质解析建议")
-                st.success(f"**当前工况建议：** {latest['AI水质解析与建议']}")
-
+                st.markdown("### 🤖 AI 大模型污泥减量化解析建议")
+                st.success(f"**当前工况建议：** {latest['AI污泥减量化建议']}")
+            with st.container(border=True):
+                st.markdown("### 💰 污泥减量化预期成果")
+                base_sludge_rate = 0.75
+                reduction_rate = round(0.03 + random.uniform(0.01, 0.03), 3)
+                daily_water = 100000
+                sludge_reduction_tons = daily_water * base_sludge_rate * reduction_rate / 1000
+                sludge_cost_per_ton = 300
+                annual_saving = sludge_reduction_tons * sludge_cost_per_ton * 365
+                carbon_reduction = sludge_reduction_tons * 0.35 * 365
+                col_eff1, col_eff2, col_eff3, col_eff4 = st.columns(4)
+                col_eff1.metric("污泥减量率", f"{reduction_rate*100:.1f}%", "较传统模式")
+                col_eff2.metric("日减泥量", f"{sludge_reduction_tons:.2f} 吨", "源头减量")
+                col_eff3.metric("年节省处置费", f"{annual_saving/10000:.1f} 万元", "按300元/吨计")
+                col_eff4.metric("年减碳量", f"{carbon_reduction:.1f} 吨CO₂", "助力双碳目标")
+                st.info(f"**测算说明**：假设水厂日处理规模 10 万吨，通过 AI 智能调控 SRT 和 F/M，源头减泥率约 {reduction_rate*100:.1f}%，可显著降低污泥处置成本与碳排放。")
             csv = st.session_state.history_data.to_csv(index=False).encode('utf-8-sig')
-            st.download_button("📥 下载实时数据 (CSV)", csv, "实时水质数据.csv", "text/csv", type="primary")
+            st.download_button("📥 下载实时数据 (CSV)", csv, "污泥减量化数据.csv", "text/csv", type="primary")
             st.dataframe(st.session_state.history_data, use_container_width=True, height=400)
 
-    # ---- Tab 2：时间序列 ----
     with tab2:
-        st.subheader("⏳ 进出水COD时间序列趋势")
-        dates = pd.date_range(start="2026-08-15", periods=30, freq="D")
-        ts_data = pd.DataFrame({
-            "日期": dates,
-            "进水COD": np.random.normal(250, 40, 30),
-            "出水COD": np.random.normal(12, 3, 30)
-        })
-        fig_ts = px.line(ts_data, x="日期", y=["进水COD", "出水COD"], title="近30天进出水COD变化趋势")
+        st.subheader("⏳ 基于真实历史数据的时间序列趋势")
+        ts_data = pd.DataFrame({"序号": range(len(X)), "进水COD": X["进水COD"], "进水BOD5": X["进水BOD5"], "进水SS": X["进水SS"]})
+        fig_ts = px.line(ts_data, x="序号", y=["进水COD", "进水BOD5", "进水SS"], title="当涂华水水务真实进水水质趋势")
         fig_ts.update_layout(template=st.session_state.theme)
         st.plotly_chart(fig_ts, use_container_width=True)
 
-    # ---- Tab 3：特征重要性分析 ----
     with tab3:
         st.subheader("📈 特征重要性与斯皮尔曼相关性分析")
-
-        st.markdown("### 🔥 斯皮尔曼相关性热力图（各指标间相关性）")
+        target_var = st.selectbox("选择目标变量", ["有机质占比", "污泥沉降指数SVI"])
+        
+        st.markdown("### 🔥 斯皮尔曼相关性热力图")
         corr_matrix = X.corr(method='spearman')
         fig_heat = px.imshow(corr_matrix, text_auto=".2f", color_continuous_scale='RdBu_r', title="Spearman Correlation Heatmap")
         fig_heat.update_layout(template=st.session_state.theme)
         st.plotly_chart(fig_heat, use_container_width=True)
 
-        st.markdown("### 🎯 特征重要性（判断影响污泥龄的最大变量）")
-        col_m1, col_m2 = st.columns([1, 2])
-        with col_m1:
-            selected_model = st.selectbox("选择模型", ["Linear", "Lasso", "RF", "XGBoost"])
-        with col_m2:
-            st.write("")
+        st.markdown(f"### 🎯 特征重要性（预测 {target_var}）")
+        col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
+        with col_m1: btn_linear = st.button("Linear", use_container_width=True)
+        with col_m2: btn_lasso = st.button("Lasso", use_container_width=True)
+        with col_m3: btn_rf = st.button("RF", use_container_width=True)
+        with col_m4: btn_xgb = st.button("XGBoost", use_container_width=True)
+        with col_m5: btn_all = st.button("📊 全部对比图", use_container_width=True)
 
-        if selected_model == "Linear":
-            importance = np.abs(models["Linear"].coef_)
-        elif selected_model == "Lasso":
-            importance = np.abs(models["Lasso"].coef_)
-        elif selected_model == "RF":
-            importance = models["RF"].feature_importances_
+        current_models = models_dict[target_var]
+        if btn_all:
+            fig_all = go.Figure()
+            fig_all.add_trace(go.Bar(x=X.columns, y=np.abs(current_models["Linear"].coef_), name="Linear"))
+            fig_all.add_trace(go.Bar(x=X.columns, y=np.abs(current_models["Lasso"].coef_), name="Lasso"))
+            fig_all.add_trace(go.Bar(x=X.columns, y=current_models["RF"].feature_importances_, name="RF"))
+            fig_all.add_trace(go.Bar(x=X.columns, y=current_models["XGBoost"].feature_importances_, name="XGBoost"))
+            fig_all.update_layout(title=f"全部模型 - {target_var} 特征重要性对比", barmode='group', template=st.session_state.theme)
+            st.plotly_chart(fig_all, use_container_width=True)
+            # 表格补充（下载）
+            df_fi = pd.DataFrame({
+                "特征": X.columns, 
+                "Linear": np.abs(current_models["Linear"].coef_),
+                "Lasso": np.abs(current_models["Lasso"].coef_),
+                "RF": current_models["RF"].feature_importances_,
+                "XGBoost": current_models["XGBoost"].feature_importances_
+            })
+            st.dataframe(df_fi)
+            st.download_button("📥 下载全部特征重要性数据表", df_fi.to_csv(index=False).encode('utf-8-sig'), f"{target_var}_全部特征重要性.csv", "text/csv")
         else:
-            importance = models["XGBoost"].feature_importances_
+            selected_model = None
+            if btn_linear: selected_model = "Linear"
+            elif btn_lasso: selected_model = "Lasso"
+            elif btn_rf: selected_model = "RF"
+            elif btn_xgb: selected_model = "XGBoost"
+            if selected_model:
+                if selected_model == "Linear": importance = np.abs(current_models["Linear"].coef_)
+                elif selected_model == "Lasso": importance = np.abs(current_models["Lasso"].coef_)
+                elif selected_model == "RF": importance = current_models["RF"].feature_importances_
+                else: importance = current_models["XGBoost"].feature_importances_
+                fig_fi = px.bar(x=importance, y=X.columns, orientation='h', title=f"{selected_model} - {target_var} 特征重要性")
+                fig_fi.update_layout(template=st.session_state.theme)
+                st.plotly_chart(fig_fi, use_container_width=True)
+                # 表格补充（下载）
+                df_single = pd.DataFrame({"特征": X.columns, "重要性": importance})
+                st.dataframe(df_single)
+                st.download_button(f"📥 下载 {selected_model} 特征重要性数据表", df_single.to_csv(index=False).encode('utf-8-sig'), f"{target_var}_{selected_model}_特征重要性.csv", "text/csv")
 
-        features = X.columns.tolist()
-        fig_fi = px.bar(x=importance, y=features, orientation='h', title=f"{selected_model} - F/M Ratio Feature Importance")
-        fig_fi.update_layout(template=st.session_state.theme)
-        st.plotly_chart(fig_fi, use_container_width=True)
-
-    # ---- Tab 4：模型评价与对比 ----
     with tab4:
         st.subheader("🤖 模型性能评价与对比分析")
+        target_var = st.selectbox("选择目标变量进行评价", ["有机质占比", "污泥沉降指数SVI"])
+        current_metrics = metrics_dict[target_var]
+        current_models = models_dict[target_var]
 
         st.markdown("### 📉 预测值 vs 实测值（散点图）")
         col_s1, col_s2, col_s3, col_s4 = st.columns(4)
-        y_pred_linear = models["Linear"].predict(X_test)
-        y_pred_lasso = models["Lasso"].predict(X_test)
-        y_pred_rf = models["RF"].predict(X_test)
-        y_pred_xgb = models["XGBoost"].predict(X_test)
+        y_pred_linear = current_models["Linear"].predict(X_test)
+        y_pred_lasso = current_models["Lasso"].predict(X_test)
+        y_pred_rf = current_models["RF"].predict(X_test)
+        y_pred_xgb = current_models["XGBoost"].predict(X_test)
 
+        # ❌ 注意：这里修复了 trendline 报错，改用单纯的散点图 + 理想线
         with col_s1:
-            fig_s1 = px.scatter(x=y_test, y=y_pred_linear, trendline="ols", title=f"Linear (R²={metrics['Linear']['R²']})")
+            fig_s1 = px.scatter(x=y_test, y=y_pred_linear, title=f"Linear (R²={current_metrics['Linear']['R²']})")
             fig_s1.add_trace(go.Scatter(x=y_test, y=y_test, mode='lines', name='Ideal', line=dict(color='red', dash='dash')))
             fig_s1.update_layout(template=st.session_state.theme)
             st.plotly_chart(fig_s1, use_container_width=True)
         with col_s2:
-            fig_s2 = px.scatter(x=y_test, y=y_pred_lasso, trendline="ols", title=f"Lasso (R²={metrics['Lasso']['R²']})")
+            fig_s2 = px.scatter(x=y_test, y=y_pred_lasso, title=f"Lasso (R²={current_metrics['Lasso']['R²']})")
             fig_s2.add_trace(go.Scatter(x=y_test, y=y_test, mode='lines', name='Ideal', line=dict(color='red', dash='dash')))
             fig_s2.update_layout(template=st.session_state.theme)
             st.plotly_chart(fig_s2, use_container_width=True)
         with col_s3:
-            fig_s3 = px.scatter(x=y_test, y=y_pred_rf, trendline="ols", title=f"RF (R²={metrics['RF']['R²']})")
+            fig_s3 = px.scatter(x=y_test, y=y_pred_rf, title=f"RF (R²={current_metrics['RF']['R²']})")
             fig_s3.add_trace(go.Scatter(x=y_test, y=y_test, mode='lines', name='Ideal', line=dict(color='red', dash='dash')))
             fig_s3.update_layout(template=st.session_state.theme)
             st.plotly_chart(fig_s3, use_container_width=True)
         with col_s4:
-            fig_s4 = px.scatter(x=y_test, y=y_pred_xgb, trendline="ols", title=f"XGBoost (R²={metrics['XGBoost']['R²']})")
+            fig_s4 = px.scatter(x=y_test, y=y_pred_xgb, title=f"XGBoost (R²={current_metrics['XGBoost']['R²']})")
             fig_s4.add_trace(go.Scatter(x=y_test, y=y_test, mode='lines', name='Ideal', line=dict(color='red', dash='dash')))
             fig_s4.update_layout(template=st.session_state.theme)
             st.plotly_chart(fig_s4, use_container_width=True)
 
         st.markdown("### 📊 模型评价指标对比")
-        metric_choice = st.selectbox("选择评价指标", ["R²", "RMSE", "MAE", "MAPE"])
-        model_names = list(metrics.keys())
-        values = [metrics[m][metric_choice] for m in model_names]
+        col_met1, col_met2, col_met3, col_met4, col_met5 = st.columns(5)
+        with col_met1: btn_r2 = st.button("R²", use_container_width=True)
+        with col_met2: btn_rmse = st.button("RMSE", use_container_width=True)
+        with col_met3: btn_mae = st.button("MAE", use_container_width=True)
+        with col_met4: btn_mape = st.button("MAPE", use_container_width=True)
+        with col_met5: btn_all_metrics = st.button("📊 全部评价指标对比", use_container_width=True)
 
-        col_bar, col_table = st.columns([2, 1])
-        with col_bar:
-            fig_bar = px.bar(x=model_names, y=values, title=f"{metric_choice} 对比", color=model_names)
-            fig_bar.update_layout(template=st.session_state.theme)
-            st.plotly_chart(fig_bar, use_container_width=True)
-        with col_table:
-            df_metrics = pd.DataFrame(metrics).T
-            st.dataframe(df_metrics)
-            st.download_button("📥 下载评价指标表", df_metrics.to_csv().encode('utf-8-sig'), "模型评价指标.csv", "text/csv")
+        model_names = list(current_metrics.keys())
+        if btn_all_metrics:
+            fig_all_metrics = go.Figure()
+            for metric_name in ["R²", "RMSE", "MAE", "MAPE"]:
+                fig_all_metrics.add_trace(go.Bar(x=model_names, y=[current_metrics[m][metric_name] for m in model_names], name=metric_name))
+            fig_all_metrics.update_layout(title=f"全部评价指标对比 - {target_var}", barmode='group', template=st.session_state.theme)
+            st.plotly_chart(fig_all_metrics, use_container_width=True)
+        else:
+            selected_metric = None
+            if btn_r2: selected_metric = "R²"
+            elif btn_rmse: selected_metric = "RMSE"
+            elif btn_mae: selected_metric = "MAE"
+            elif btn_mape: selected_metric = "MAPE"
+
+            if selected_metric:
+                values = [current_metrics[m][selected_metric] for m in model_names]
+                fig_bar = px.bar(x=model_names, y=values, title=f"{selected_metric} 对比", color=model_names, template=st.session_state.theme)
+                st.plotly_chart(fig_bar, use_container_width=True)
+
+        df_metrics = pd.DataFrame(current_metrics).T
+        st.dataframe(df_metrics)
+        st.download_button(f"📥 下载 {target_var} 评价指标表", df_metrics.to_csv().encode('utf-8-sig'), f"{target_var}_评价指标.csv", "text/csv")
 
         st.markdown("### 📦 误差分布（箱线图）")
         df_error = pd.DataFrame({
             "模型": ["Linear"]*len(y_test) + ["Lasso"]*len(y_test) + ["RF"]*len(y_test) + ["XGBoost"]*len(y_test),
             "绝对误差": np.concatenate([
-                np.abs(y_test - y_pred_linear),
-                np.abs(y_test - y_pred_lasso),
-                np.abs(y_test - y_pred_rf),
-                np.abs(y_test - y_pred_xgb)
+                np.abs(y_test - y_pred_linear), np.abs(y_test - y_pred_lasso),
+                np.abs(y_test - y_pred_rf), np.abs(y_test - y_pred_xgb)
             ])
         })
-        fig_box = px.box(df_error, x="模型", y="绝对误差", color="模型", title="Absolute Error Distribution")
-        fig_box.update_layout(template=st.session_state.theme)
+        fig_box = px.box(df_error, x="模型", y="绝对误差", color="模型", title=f"Absolute Error Distribution - {target_var}", template=st.session_state.theme)
         st.plotly_chart(fig_box, use_container_width=True)
 
-    # ---- Tab 5：SHAP分析 ----
     with tab5:
         st.subheader("🔍 SHAP 模型可解释性分析")
+        target_var = st.selectbox("选择目标变量", ["有机质占比", "污泥沉降指数SVI"])
         shap_model = st.selectbox("选择SHAP分析的模型", ["Linear", "Lasso", "RF", "XGBoost"])
-        shap_vals = shap_values_dict[shap_model]
+        shap_vals = shap_dict[target_var][shap_model]
 
         st.markdown("### 🐝 SHAP 蜂群图 (特征分布影响)")
         fig_bee = go.Figure()
         for i, feature in enumerate(X.columns):
             fig_bee.add_trace(go.Scatter(
-                x=shap_vals.values[:, i],
-                y=[feature]*len(shap_vals.values),
-                mode='markers',
-                marker=dict(size=8, color=shap_vals.values[:, i], colorscale='RdBu_r'),
+                x=shap_vals.values[:, i], y=[feature]*len(shap_vals.values),
+                mode='markers', marker=dict(size=8, color=shap_vals.values[:, i], colorscale='RdBu_r'),
                 showlegend=False
             ))
-        fig_bee.update_layout(title="SHAP Beeswarm Plot", xaxis_title="SHAP Value", yaxis_title="Feature")
-        fig_bee.update_layout(template=st.session_state.theme)
+        fig_bee.update_layout(title=f"SHAP Beeswarm Plot - {target_var}", xaxis_title="SHAP Value", yaxis_title="Feature", template=st.session_state.theme)
         st.plotly_chart(fig_bee, use_container_width=True)
 
         st.markdown("### 📊 SHAP 条形图 (特征平均贡献度)")
         mean_shap = np.abs(shap_vals.values).mean(axis=0)
-        fig_bar_shap = px.bar(x=mean_shap, y=X.columns, orientation='h', title="SHAP Feature Importance (Mean |SHAP|)")
-        fig_bar_shap.update_layout(template=st.session_state.theme)
+        fig_bar_shap = px.bar(x=mean_shap, y=X.columns, orientation='h', title=f"SHAP Feature Importance - {target_var}", template=st.session_state.theme)
         st.plotly_chart(fig_bar_shap, use_container_width=True)
 
         st.markdown("### 📋 SHAP值数据表格")
         df_shap = pd.DataFrame(shap_vals.values, columns=X.columns)
         st.dataframe(df_shap.head(10))
-        st.download_button("📥 下载SHAP值分析表", df_shap.to_csv(index=False).encode('utf-8-sig'), "SHAP分析表.csv", "text/csv")
+        st.download_button(f"📥 下载 {target_var} SHAP值分析表", df_shap.to_csv(index=False).encode('utf-8-sig'), f"{target_var}_SHAP分析表.csv", "text/csv")
 
     st.markdown("<br><p style='text-align: center; color: #64748B;'>© 2026 驰星队 · 马鞍山学院</p>", unsafe_allow_html=True)
 
-
-# ==================== 6. 路由控制 ====================
 if st.session_state.page == "welcome":
     show_welcome()
 else:

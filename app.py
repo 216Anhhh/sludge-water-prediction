@@ -19,7 +19,7 @@ st.set_page_config(page_title="净泥智控 - 水质智能分析平台", page_ic
 
 # ==================== 2. 全局状态初始化 ====================
 if "page" not in st.session_state:
-    st.session_state.page = "main"  # 已删除封面，直接进入主界面
+    st.session_state.page = "main"
 
 if "history_data" not in st.session_state:
     st.session_state.history_data = pd.DataFrame(columns=[
@@ -41,14 +41,13 @@ if "is_paused" not in st.session_state:
     st.session_state.is_paused = False
 
 
-# ==================== 3. 缓存模型训练与SHAP计算 ====================
+# ==================== 3. 缓存模型训练与SHAP计算（含防缓存残缺修复） ====================
 @st.cache_resource(show_spinner="正在初始化模型与数据...")
 def load_and_train_models():
     """模拟历史数据，训练4个模型并计算SHAP值，只在首次加载时消耗内存"""
     np.random.seed(42)
-    n_samples = 200  # 极小样本量，保证内存绝对安全
+    n_samples = 200
 
-    # 模拟真实水务数据（贴合当涂华水数据范围）
     X = pd.DataFrame({
         "进水流量": np.random.normal(50000, 5000, n_samples),
         "进水COD": np.random.normal(250, 40, n_samples),
@@ -60,10 +59,8 @@ def load_and_train_models():
         "水温": np.random.normal(18.5, 0.8, n_samples),
     })
 
-    # 模拟目标变量：F/M Ratio
     y_fm = 0.18 + (X["进水BOD5"] / 1000 - X["进水SS"] / 20000) + np.random.normal(0, 0.01, n_samples)
 
-    # 初始化四个模型（限制树的数量与深度，控制内存）
     models = {
         "Linear": LinearRegression(),
         "Lasso": Lasso(alpha=0.1),
@@ -89,10 +86,16 @@ def load_and_train_models():
             "MAPE": round(np.mean(np.abs((y_test - y_pred) / y_test)) * 100, 2)
         }
 
-        # SHAP 计算（仅计算前 50 个样本，防止内存爆炸）
         explainer = shap.Explainer(model.predict, X_train)
         shap_values = explainer(X_test[:50])
         shap_values_dict[name] = shap_values
+
+    # ============ 新增：防止云端缓存残缺的兜底逻辑 ============
+    if "Linear" not in trained_models:
+        st.warning("检测到云端缓存异常，正在重新初始化模型...")
+        st.cache_resource.clear()
+        return load_and_train_models()
+    # =======================================================
 
     return trained_models, metrics, shap_values_dict, X, y_fm, X_test, y_test
 
@@ -138,14 +141,12 @@ def generate_realtime_row():
 
 # ==================== 5. 主界面 ====================
 def show_main():
-    # 加载模型（仅第一次加载时训练）
     models, metrics, shap_values_dict, X, y_fm, X_test, y_test = load_and_train_models()
 
-    # ----- 侧边栏（含主题切换、实时数据接入、暂停/清零控制） -----
+    # ----- 侧边栏 -----
     with st.sidebar:
         st.header("⚙️ 系统设置与数据接入")
 
-        # 1. 主题切换
         theme_choice = st.radio("🎨 界面主题", ["🌙 暗黑模式", "☀️ 明亮模式"], index=0)
         st.session_state.theme = "plotly_dark" if "暗黑" in theme_choice else "plotly_white"
 
@@ -163,7 +164,6 @@ def show_main():
                 st.session_state.history_data = pd.concat([st.session_state.history_data, pd.DataFrame([new_row])], ignore_index=True)
                 st.toast("✅ 手动数据已记录！")
         else:
-            # 启动、暂停、清空三个控制按钮
             col_btn1, col_btn2 = st.columns(2)
             with col_btn1:
                 if st.button("▶️ 启动采集", type="primary", use_container_width=True):
@@ -207,7 +207,6 @@ def show_main():
                 st.session_state.last_run_time = time.time()
                 new_row = generate_realtime_row()
                 st.session_state.history_data = pd.concat([st.session_state.history_data, pd.DataFrame([new_row])], ignore_index=True)
-                # 只保留最新10行，坚决控制内存
                 st.session_state.history_data = st.session_state.history_data.tail(10)
                 st.toast(f"⏰ {new_row['监测时间']} 已自动追加新数据！")
 

@@ -244,7 +244,6 @@ def show_main():
 
     with tab3:
         st.subheader("📈 特征重要性与斯皮尔曼相关性分析")
-        # ✅ 添加 key
         target_var_fi = st.selectbox("选择目标变量", ["有机质占比", "污泥沉降指数SVI"], key="fi_target_var")
         
         st.markdown("### 🔥 斯皮尔曼相关性热力图")
@@ -255,7 +254,6 @@ def show_main():
 
         st.markdown(f"### 🎯 特征重要性（预测 {target_var_fi}）")
         col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
-        # ✅ 为所有按钮添加 key
         with col_m1: btn_linear = st.button("Linear", use_container_width=True, key="fi_btn_linear")
         with col_m2: btn_lasso = st.button("Lasso", use_container_width=True, key="fi_btn_lasso")
         with col_m3: btn_rf = st.button("RF", use_container_width=True, key="fi_btn_rf")
@@ -271,7 +269,6 @@ def show_main():
             fig_all.add_trace(go.Bar(x=X.columns, y=current_models["XGBoost"].feature_importances_, name="XGBoost"))
             fig_all.update_layout(title=f"全部模型 - {target_var_fi} 特征重要性对比", barmode='group', template=st.session_state.theme)
             st.plotly_chart(fig_all, use_container_width=True)
-            # 表格补充（下载）
             df_fi = pd.DataFrame({
                 "特征": X.columns, 
                 "Linear": np.abs(current_models["Linear"].coef_),
@@ -295,14 +292,12 @@ def show_main():
                 fig_fi = px.bar(x=importance, y=X.columns, orientation='h', title=f"{selected_model} - {target_var_fi} 特征重要性")
                 fig_fi.update_layout(template=st.session_state.theme)
                 st.plotly_chart(fig_fi, use_container_width=True)
-                # 表格补充（下载）
                 df_single = pd.DataFrame({"特征": X.columns, "重要性": importance})
                 st.dataframe(df_single)
                 st.download_button(f"📥 下载 {selected_model} 特征重要性数据表", df_single.to_csv(index=False).encode('utf-8-sig'), f"{target_var_fi}_{selected_model}_特征重要性.csv", "text/csv", key="dl_fi_single")
 
     with tab4:
         st.subheader("🤖 模型性能评价与对比分析")
-        # ✅ 添加 key
         target_var_metric = st.selectbox("选择目标变量进行评价", ["有机质占比", "污泥沉降指数SVI"], key="metric_target_var")
         current_metrics = metrics_dict[target_var_metric]
         current_models = models_dict[target_var_metric]
@@ -314,30 +309,33 @@ def show_main():
         y_pred_rf = current_models["RF"].predict(X_test)
         y_pred_xgb = current_models["XGBoost"].predict(X_test)
 
+        # ✅ 修复：让红线的起点和终点跟随真实值/预测值的范围
+        min_val = min(min(y_test), min(y_pred_linear), min(y_pred_lasso), min(y_pred_rf), min(y_pred_xgb))
+        max_val = max(max(y_test), max(y_pred_linear), max(y_pred_lasso), max(y_pred_rf), max(y_pred_xgb))
+        
         with col_s1:
             fig_s1 = px.scatter(x=y_test, y=y_pred_linear, title=f"Linear (R²={current_metrics['Linear']['R²']})")
-            fig_s1.add_trace(go.Scatter(x=y_test, y=y_test, mode='lines', name='Ideal', line=dict(color='red', dash='dash')))
+            fig_s1.add_trace(go.Scatter(x=[min_val, max_val], y=[min_val, max_val], mode='lines', name='Ideal', line=dict(color='red', dash='dash')))
             fig_s1.update_layout(template=st.session_state.theme)
             st.plotly_chart(fig_s1, use_container_width=True)
         with col_s2:
             fig_s2 = px.scatter(x=y_test, y=y_pred_lasso, title=f"Lasso (R²={current_metrics['Lasso']['R²']})")
-            fig_s2.add_trace(go.Scatter(x=y_test, y=y_test, mode='lines', name='Ideal', line=dict(color='red', dash='dash')))
+            fig_s2.add_trace(go.Scatter(x=[min_val, max_val], y=[min_val, max_val], mode='lines', name='Ideal', line=dict(color='red', dash='dash')))
             fig_s2.update_layout(template=st.session_state.theme)
             st.plotly_chart(fig_s2, use_container_width=True)
         with col_s3:
             fig_s3 = px.scatter(x=y_test, y=y_pred_rf, title=f"RF (R²={current_metrics['RF']['R²']})")
-            fig_s3.add_trace(go.Scatter(x=y_test, y=y_test, mode='lines', name='Ideal', line=dict(color='red', dash='dash')))
+            fig_s3.add_trace(go.Scatter(x=[min_val, max_val], y=[min_val, max_val], mode='lines', name='Ideal', line=dict(color='red', dash='dash')))
             fig_s3.update_layout(template=st.session_state.theme)
             st.plotly_chart(fig_s3, use_container_width=True)
         with col_s4:
             fig_s4 = px.scatter(x=y_test, y=y_pred_xgb, title=f"XGBoost (R²={current_metrics['XGBoost']['R²']})")
-            fig_s4.add_trace(go.Scatter(x=y_test, y=y_test, mode='lines', name='Ideal', line=dict(color='red', dash='dash')))
+            fig_s4.add_trace(go.Scatter(x=[min_val, max_val], y=[min_val, max_val], mode='lines', name='Ideal', line=dict(color='red', dash='dash')))
             fig_s4.update_layout(template=st.session_state.theme)
             st.plotly_chart(fig_s4, use_container_width=True)
 
         st.markdown("### 📊 模型评价指标对比")
         col_met1, col_met2, col_met3, col_met4, col_met5 = st.columns(5)
-        # ✅ 为所有按钮添加 key
         with col_met1: btn_r2 = st.button("R²", use_container_width=True, key="metric_btn_r2")
         with col_met2: btn_rmse = st.button("RMSE", use_container_width=True, key="metric_btn_rmse")
         with col_met3: btn_mae = st.button("MAE", use_container_width=True, key="metric_btn_mae")
@@ -380,7 +378,6 @@ def show_main():
 
     with tab5:
         st.subheader("🔍 SHAP 模型可解释性分析")
-        # ✅ 最关键修复：为这个选单加上独一无二的 key，防止 ID 冲突
         target_var_shap = st.selectbox("🎯 请选择SHAP分析的目标变量", ["有机质占比", "污泥沉降指数SVI"], key="shap_target_select")
         shap_model = st.selectbox("选择SHAP分析的模型", ["Linear", "Lasso", "RF", "XGBoost"], key="shap_model_select")
         shap_vals = shap_dict[target_var_shap][shap_model]

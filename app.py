@@ -133,16 +133,16 @@ def show_main():
 
     with st.sidebar:
         st.header("⚙️ 系统设置与数据接入")
-        theme_choice = st.radio("🎨 界面主题", ["🌙 暗黑模式", "☀️ 明亮模式"], index=0)
+        theme_choice = st.radio("🎨 界面主题", ["🌙 暗黑模式", "☀️ 明亮模式"], index=0, key="theme_radio")
         st.session_state.theme = "plotly_dark" if "暗黑" in theme_choice else "plotly_white"
         st.divider()
         st.subheader("🔌 实时数据接入")
-        data_source = st.radio("数据源选择", ["模拟实时数据", "手动输入"], index=0)
+        data_source = st.radio("数据源选择", ["模拟实时数据", "手动输入"], index=0, key="data_source_radio")
         
         if data_source == "手动输入":
             st.number_input("进水流量", value=45000, key="manual_q")
             st.number_input("进水COD", value=250, key="manual_cod")
-            if st.button("▶️ 手动记录本次数据", type="primary"):
+            if st.button("▶️ 手动记录本次数据", type="primary", key="manual_btn"):
                 st.session_state.predicted = True
                 new_row = generate_realtime_row()
                 st.session_state.history_data = pd.concat([st.session_state.history_data, pd.DataFrame([new_row])], ignore_index=True)
@@ -150,15 +150,15 @@ def show_main():
         else:
             col_btn1, col_btn2 = st.columns(2)
             with col_btn1:
-                if st.button("▶️ 启动采集", type="primary", use_container_width=True):
+                if st.button("▶️ 启动采集", type="primary", use_container_width=True, key="start_btn"):
                     st.session_state.predicted = True
                     st.session_state.is_paused = False
                     st.toast("⏰ 采集已开始...")
             with col_btn2:
-                if st.button("⏸️ 暂停采集", use_container_width=True):
+                if st.button("⏸️ 暂停采集", use_container_width=True, key="pause_btn"):
                     st.session_state.is_paused = True
                     st.toast("⏸️ 采集已暂停。")
-            if st.button("🗑️ 清空数据并重置", use_container_width=True):
+            if st.button("🗑️ 清空数据并重置", use_container_width=True, key="clear_btn"):
                 st.session_state.history_data = pd.DataFrame(columns=st.session_state.history_data.columns)
                 st.session_state.row_counter = 0
                 st.session_state.predicted = False
@@ -166,7 +166,7 @@ def show_main():
                 st.session_state.last_run_time = time.time()
                 st.toast("✅ 已重置！")
                 st.rerun()
-            if st.button("🔄 强制清空缓存并重启", use_container_width=True):
+            if st.button("🔄 强制清空缓存并重启", use_container_width=True, key="restart_btn"):
                 st.cache_resource.clear()
                 st.session_state.history_data = pd.DataFrame(columns=st.session_state.history_data.columns)
                 st.session_state.row_counter = 0
@@ -177,9 +177,9 @@ def show_main():
         st.subheader("⏱️ 自动输出设置")
         col_val, col_unit = st.columns([2, 1])
         with col_val:
-            interval_val = st.number_input("时间间隔", min_value=1, value=5, step=1)
+            interval_val = st.number_input("时间间隔", min_value=1, value=5, step=1, key="interval_val")
         with col_unit:
-            interval_unit = st.selectbox("单位", ["秒", "分钟", "小时"], index=0)
+            interval_unit = st.selectbox("单位", ["秒", "分钟", "小时"], index=0, key="interval_unit")
         update_interval = interval_val * {"秒": 1, "分钟": 60, "小时": 3600}[interval_unit]
         st.caption(f"每 {interval_val} {interval_unit} 自动追加一次数据")
 
@@ -232,7 +232,7 @@ def show_main():
                 col_eff4.metric("年减碳量", f"{carbon_reduction:.1f} 吨CO₂", "助力双碳目标")
                 st.info(f"**测算说明**：假设水厂日处理规模 10 万吨，通过 AI 智能调控 SRT 和 F/M，源头减泥率约 {reduction_rate*100:.1f}%，可显著降低污泥处置成本与碳排放。")
             csv = st.session_state.history_data.to_csv(index=False).encode('utf-8-sig')
-            st.download_button("📥 下载实时数据 (CSV)", csv, "污泥减量化数据.csv", "text/csv", type="primary")
+            st.download_button("📥 下载实时数据 (CSV)", csv, "污泥减量化数据.csv", "text/csv", type="primary", key="download_live_data")
             st.dataframe(st.session_state.history_data, use_container_width=True, height=400)
 
     with tab2:
@@ -244,7 +244,8 @@ def show_main():
 
     with tab3:
         st.subheader("📈 特征重要性与斯皮尔曼相关性分析")
-        target_var = st.selectbox("选择目标变量", ["有机质占比", "污泥沉降指数SVI"])
+        # ✅ 添加 key
+        target_var_fi = st.selectbox("选择目标变量", ["有机质占比", "污泥沉降指数SVI"], key="fi_target_var")
         
         st.markdown("### 🔥 斯皮尔曼相关性热力图")
         corr_matrix = X.corr(method='spearman')
@@ -252,22 +253,23 @@ def show_main():
         fig_heat.update_layout(template=st.session_state.theme)
         st.plotly_chart(fig_heat, use_container_width=True)
 
-        st.markdown(f"### 🎯 特征重要性（预测 {target_var}）")
+        st.markdown(f"### 🎯 特征重要性（预测 {target_var_fi}）")
         col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
-        with col_m1: btn_linear = st.button("Linear", use_container_width=True)
-        with col_m2: btn_lasso = st.button("Lasso", use_container_width=True)
-        with col_m3: btn_rf = st.button("RF", use_container_width=True)
-        with col_m4: btn_xgb = st.button("XGBoost", use_container_width=True)
-        with col_m5: btn_all = st.button("📊 全部对比图", use_container_width=True)
+        # ✅ 为所有按钮添加 key
+        with col_m1: btn_linear = st.button("Linear", use_container_width=True, key="fi_btn_linear")
+        with col_m2: btn_lasso = st.button("Lasso", use_container_width=True, key="fi_btn_lasso")
+        with col_m3: btn_rf = st.button("RF", use_container_width=True, key="fi_btn_rf")
+        with col_m4: btn_xgb = st.button("XGBoost", use_container_width=True, key="fi_btn_xgb")
+        with col_m5: btn_all = st.button("📊 全部对比图", use_container_width=True, key="fi_btn_all")
 
-        current_models = models_dict[target_var]
+        current_models = models_dict[target_var_fi]
         if btn_all:
             fig_all = go.Figure()
             fig_all.add_trace(go.Bar(x=X.columns, y=np.abs(current_models["Linear"].coef_), name="Linear"))
             fig_all.add_trace(go.Bar(x=X.columns, y=np.abs(current_models["Lasso"].coef_), name="Lasso"))
             fig_all.add_trace(go.Bar(x=X.columns, y=current_models["RF"].feature_importances_, name="RF"))
             fig_all.add_trace(go.Bar(x=X.columns, y=current_models["XGBoost"].feature_importances_, name="XGBoost"))
-            fig_all.update_layout(title=f"全部模型 - {target_var} 特征重要性对比", barmode='group', template=st.session_state.theme)
+            fig_all.update_layout(title=f"全部模型 - {target_var_fi} 特征重要性对比", barmode='group', template=st.session_state.theme)
             st.plotly_chart(fig_all, use_container_width=True)
             # 表格补充（下载）
             df_fi = pd.DataFrame({
@@ -278,7 +280,7 @@ def show_main():
                 "XGBoost": current_models["XGBoost"].feature_importances_
             })
             st.dataframe(df_fi)
-            st.download_button("📥 下载全部特征重要性数据表", df_fi.to_csv(index=False).encode('utf-8-sig'), f"{target_var}_全部特征重要性.csv", "text/csv")
+            st.download_button("📥 下载全部特征重要性数据表", df_fi.to_csv(index=False).encode('utf-8-sig'), f"{target_var_fi}_全部特征重要性.csv", "text/csv", key="dl_fi_all")
         else:
             selected_model = None
             if btn_linear: selected_model = "Linear"
@@ -290,19 +292,20 @@ def show_main():
                 elif selected_model == "Lasso": importance = np.abs(current_models["Lasso"].coef_)
                 elif selected_model == "RF": importance = current_models["RF"].feature_importances_
                 else: importance = current_models["XGBoost"].feature_importances_
-                fig_fi = px.bar(x=importance, y=X.columns, orientation='h', title=f"{selected_model} - {target_var} 特征重要性")
+                fig_fi = px.bar(x=importance, y=X.columns, orientation='h', title=f"{selected_model} - {target_var_fi} 特征重要性")
                 fig_fi.update_layout(template=st.session_state.theme)
                 st.plotly_chart(fig_fi, use_container_width=True)
                 # 表格补充（下载）
                 df_single = pd.DataFrame({"特征": X.columns, "重要性": importance})
                 st.dataframe(df_single)
-                st.download_button(f"📥 下载 {selected_model} 特征重要性数据表", df_single.to_csv(index=False).encode('utf-8-sig'), f"{target_var}_{selected_model}_特征重要性.csv", "text/csv")
+                st.download_button(f"📥 下载 {selected_model} 特征重要性数据表", df_single.to_csv(index=False).encode('utf-8-sig'), f"{target_var_fi}_{selected_model}_特征重要性.csv", "text/csv", key="dl_fi_single")
 
     with tab4:
         st.subheader("🤖 模型性能评价与对比分析")
-        target_var = st.selectbox("选择目标变量进行评价", ["有机质占比", "污泥沉降指数SVI"])
-        current_metrics = metrics_dict[target_var]
-        current_models = models_dict[target_var]
+        # ✅ 添加 key
+        target_var_metric = st.selectbox("选择目标变量进行评价", ["有机质占比", "污泥沉降指数SVI"], key="metric_target_var")
+        current_metrics = metrics_dict[target_var_metric]
+        current_models = models_dict[target_var_metric]
 
         st.markdown("### 📉 预测值 vs 实测值（散点图）")
         col_s1, col_s2, col_s3, col_s4 = st.columns(4)
@@ -311,7 +314,6 @@ def show_main():
         y_pred_rf = current_models["RF"].predict(X_test)
         y_pred_xgb = current_models["XGBoost"].predict(X_test)
 
-        # ❌ 注意：这里修复了 trendline 报错，改用单纯的散点图 + 理想线
         with col_s1:
             fig_s1 = px.scatter(x=y_test, y=y_pred_linear, title=f"Linear (R²={current_metrics['Linear']['R²']})")
             fig_s1.add_trace(go.Scatter(x=y_test, y=y_test, mode='lines', name='Ideal', line=dict(color='red', dash='dash')))
@@ -335,18 +337,19 @@ def show_main():
 
         st.markdown("### 📊 模型评价指标对比")
         col_met1, col_met2, col_met3, col_met4, col_met5 = st.columns(5)
-        with col_met1: btn_r2 = st.button("R²", use_container_width=True)
-        with col_met2: btn_rmse = st.button("RMSE", use_container_width=True)
-        with col_met3: btn_mae = st.button("MAE", use_container_width=True)
-        with col_met4: btn_mape = st.button("MAPE", use_container_width=True)
-        with col_met5: btn_all_metrics = st.button("📊 全部评价指标对比", use_container_width=True)
+        # ✅ 为所有按钮添加 key
+        with col_met1: btn_r2 = st.button("R²", use_container_width=True, key="metric_btn_r2")
+        with col_met2: btn_rmse = st.button("RMSE", use_container_width=True, key="metric_btn_rmse")
+        with col_met3: btn_mae = st.button("MAE", use_container_width=True, key="metric_btn_mae")
+        with col_met4: btn_mape = st.button("MAPE", use_container_width=True, key="metric_btn_mape")
+        with col_met5: btn_all_metrics = st.button("📊 全部评价指标对比", use_container_width=True, key="metric_btn_all")
 
         model_names = list(current_metrics.keys())
         if btn_all_metrics:
             fig_all_metrics = go.Figure()
             for metric_name in ["R²", "RMSE", "MAE", "MAPE"]:
                 fig_all_metrics.add_trace(go.Bar(x=model_names, y=[current_metrics[m][metric_name] for m in model_names], name=metric_name))
-            fig_all_metrics.update_layout(title=f"全部评价指标对比 - {target_var}", barmode='group', template=st.session_state.theme)
+            fig_all_metrics.update_layout(title=f"全部评价指标对比 - {target_var_metric}", barmode='group', template=st.session_state.theme)
             st.plotly_chart(fig_all_metrics, use_container_width=True)
         else:
             selected_metric = None
@@ -362,7 +365,7 @@ def show_main():
 
         df_metrics = pd.DataFrame(current_metrics).T
         st.dataframe(df_metrics)
-        st.download_button(f"📥 下载 {target_var} 评价指标表", df_metrics.to_csv().encode('utf-8-sig'), f"{target_var}_评价指标.csv", "text/csv")
+        st.download_button(f"📥 下载 {target_var_metric} 评价指标表", df_metrics.to_csv().encode('utf-8-sig'), f"{target_var_metric}_评价指标.csv", "text/csv", key="dl_metrics")
 
         st.markdown("### 📦 误差分布（箱线图）")
         df_error = pd.DataFrame({
@@ -372,14 +375,15 @@ def show_main():
                 np.abs(y_test - y_pred_rf), np.abs(y_test - y_pred_xgb)
             ])
         })
-        fig_box = px.box(df_error, x="模型", y="绝对误差", color="模型", title=f"Absolute Error Distribution - {target_var}", template=st.session_state.theme)
+        fig_box = px.box(df_error, x="模型", y="绝对误差", color="模型", title=f"Absolute Error Distribution - {target_var_metric}", template=st.session_state.theme)
         st.plotly_chart(fig_box, use_container_width=True)
 
     with tab5:
         st.subheader("🔍 SHAP 模型可解释性分析")
-        target_var = st.selectbox("选择目标变量", ["有机质占比", "污泥沉降指数SVI"])
-        shap_model = st.selectbox("选择SHAP分析的模型", ["Linear", "Lasso", "RF", "XGBoost"])
-        shap_vals = shap_dict[target_var][shap_model]
+        # ✅ 最关键修复：为这个选单加上独一无二的 key，防止 ID 冲突
+        target_var_shap = st.selectbox("🎯 请选择SHAP分析的目标变量", ["有机质占比", "污泥沉降指数SVI"], key="shap_target_select")
+        shap_model = st.selectbox("选择SHAP分析的模型", ["Linear", "Lasso", "RF", "XGBoost"], key="shap_model_select")
+        shap_vals = shap_dict[target_var_shap][shap_model]
 
         st.markdown("### 🐝 SHAP 蜂群图 (特征分布影响)")
         fig_bee = go.Figure()
@@ -389,18 +393,18 @@ def show_main():
                 mode='markers', marker=dict(size=8, color=shap_vals.values[:, i], colorscale='RdBu_r'),
                 showlegend=False
             ))
-        fig_bee.update_layout(title=f"SHAP Beeswarm Plot - {target_var}", xaxis_title="SHAP Value", yaxis_title="Feature", template=st.session_state.theme)
+        fig_bee.update_layout(title=f"SHAP Beeswarm Plot - {target_var_shap}", xaxis_title="SHAP Value", yaxis_title="Feature", template=st.session_state.theme)
         st.plotly_chart(fig_bee, use_container_width=True)
 
         st.markdown("### 📊 SHAP 条形图 (特征平均贡献度)")
         mean_shap = np.abs(shap_vals.values).mean(axis=0)
-        fig_bar_shap = px.bar(x=mean_shap, y=X.columns, orientation='h', title=f"SHAP Feature Importance - {target_var}", template=st.session_state.theme)
+        fig_bar_shap = px.bar(x=mean_shap, y=X.columns, orientation='h', title=f"SHAP Feature Importance - {target_var_shap}", template=st.session_state.theme)
         st.plotly_chart(fig_bar_shap, use_container_width=True)
 
         st.markdown("### 📋 SHAP值数据表格")
         df_shap = pd.DataFrame(shap_vals.values, columns=X.columns)
         st.dataframe(df_shap.head(10))
-        st.download_button(f"📥 下载 {target_var} SHAP值分析表", df_shap.to_csv(index=False).encode('utf-8-sig'), f"{target_var}_SHAP分析表.csv", "text/csv")
+        st.download_button(f"📥 下载 {target_var_shap} SHAP值分析表", df_shap.to_csv(index=False).encode('utf-8-sig'), f"{target_var_shap}_SHAP分析表.csv", "text/csv", key="dl_shap")
 
     st.markdown("<br><p style='text-align: center; color: #64748B;'>© 2026 驰星队 · 马鞍山学院</p>", unsafe_allow_html=True)
 

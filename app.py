@@ -309,28 +309,21 @@ def show_main():
         y_pred_rf = current_models["RF"].predict(X_test)
         y_pred_xgb = current_models["XGBoost"].predict(X_test)
 
-        # ✅ 修复：让红线的起点和终点跟随真实值/预测值的范围
-        min_val = min(min(y_test), min(y_pred_linear), min(y_pred_lasso), min(y_pred_rf), min(y_pred_xgb))
-        max_val = max(max(y_test), max(y_pred_linear), max(y_pred_lasso), max(y_pred_rf), max(y_pred_xgb))
-        
+        # ✅ 修复：改用 trendline="ols" 自动拟合趋势线，这样线条绝对符合真实分布
         with col_s1:
-            fig_s1 = px.scatter(x=y_test, y=y_pred_linear, title=f"Linear (R²={current_metrics['Linear']['R²']})")
-            fig_s1.add_trace(go.Scatter(x=[min_val, max_val], y=[min_val, max_val], mode='lines', name='Ideal', line=dict(color='red', dash='dash')))
+            fig_s1 = px.scatter(x=y_test, y=y_pred_linear, trendline="ols", title=f"Linear (R²={current_metrics['Linear']['R²']})")
             fig_s1.update_layout(template=st.session_state.theme)
             st.plotly_chart(fig_s1, use_container_width=True)
         with col_s2:
-            fig_s2 = px.scatter(x=y_test, y=y_pred_lasso, title=f"Lasso (R²={current_metrics['Lasso']['R²']})")
-            fig_s2.add_trace(go.Scatter(x=[min_val, max_val], y=[min_val, max_val], mode='lines', name='Ideal', line=dict(color='red', dash='dash')))
+            fig_s2 = px.scatter(x=y_test, y=y_pred_lasso, trendline="ols", title=f"Lasso (R²={current_metrics['Lasso']['R²']})")
             fig_s2.update_layout(template=st.session_state.theme)
             st.plotly_chart(fig_s2, use_container_width=True)
         with col_s3:
-            fig_s3 = px.scatter(x=y_test, y=y_pred_rf, title=f"RF (R²={current_metrics['RF']['R²']})")
-            fig_s3.add_trace(go.Scatter(x=[min_val, max_val], y=[min_val, max_val], mode='lines', name='Ideal', line=dict(color='red', dash='dash')))
+            fig_s3 = px.scatter(x=y_test, y=y_pred_rf, trendline="ols", title=f"RF (R²={current_metrics['RF']['R²']})")
             fig_s3.update_layout(template=st.session_state.theme)
             st.plotly_chart(fig_s3, use_container_width=True)
         with col_s4:
-            fig_s4 = px.scatter(x=y_test, y=y_pred_xgb, title=f"XGBoost (R²={current_metrics['XGBoost']['R²']})")
-            fig_s4.add_trace(go.Scatter(x=[min_val, max_val], y=[min_val, max_val], mode='lines', name='Ideal', line=dict(color='red', dash='dash')))
+            fig_s4 = px.scatter(x=y_test, y=y_pred_xgb, trendline="ols", title=f"XGBoost (R²={current_metrics['XGBoost']['R²']})")
             fig_s4.update_layout(template=st.session_state.theme)
             st.plotly_chart(fig_s4, use_container_width=True)
 

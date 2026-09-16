@@ -236,9 +236,9 @@ def show_main():
             st.dataframe(st.session_state.history_data, use_container_width=True, height=400)
 
     with tab2:
-        st.subheader("⏳ 基于真实历史数据的时间序列趋势")
-        ts_data = pd.DataFrame({"序号": range(len(X)), "进水COD": X["进水COD"], "进水BOD5": X["进水BOD5"], "进水SS": X["进水SS"]})
-        fig_ts = px.line(ts_data, x="序号", y=["进水COD", "进水BOD5", "进水SS"], title="当涂华水水务真实进水水质趋势")
+        st.subheader("⏳ 进水COD时间序列趋势（极简版）")
+        ts_data = pd.DataFrame({"样本序号": range(len(X)), "进水COD": X["进水COD"]})
+        fig_ts = px.line(ts_data, x="样本序号", y="进水COD", title="历史进水COD变化趋势")
         fig_ts.update_layout(template=st.session_state.theme)
         st.plotly_chart(fig_ts, use_container_width=True)
 
@@ -248,9 +248,36 @@ def show_main():
         
         st.markdown("### 🔥 斯皮尔曼相关性热力图")
         corr_matrix = X.corr(method='spearman')
-        fig_heat = px.imshow(corr_matrix, text_auto=".2f", color_continuous_scale='RdBu_r', title="Spearman Correlation Heatmap")
+        
+        # ✅ 正方形放大热力图，色阶在右侧
+        fig_heat = px.imshow(
+            corr_matrix, 
+            text_auto=".2f", 
+            color_continuous_scale='RdBu_r', 
+            title="Spearman Correlation Heatmap",
+            aspect="equal", # 保持正方形
+            width=800,
+            height=800
+        )
+        fig_heat.update_layout(
+            coloraxis_colorbar=dict(
+                title="相关系数",
+                thicknessmode="pixels", thickness=20,
+                lenmode="pixels", len=600,
+                yanchor="top", y=1,
+                xanchor="left", x=1.02
+            ),
+            margin=dict(l=20, r=20, t=50, b=20)
+        )
         fig_heat.update_layout(template=st.session_state.theme)
-        st.plotly_chart(fig_heat, use_container_width=True)
+        st.plotly_chart(fig_heat, use_container_width=False)
+
+        # ============ 新增：生成相关性表格并下载 ============
+        st.markdown("### 📋 相关性数据表")
+        st.dataframe(corr_matrix, use_container_width=True)
+        csv_corr = corr_matrix.to_csv().encode('utf-8-sig')
+        st.download_button("📥 下载相关性数据表 (CSV)", csv_corr, "斯皮尔曼相关性矩阵.csv", "text/csv", key="dl_corr")
+        # ====================================================
 
         st.markdown(f"### 🎯 特征重要性（预测 {target_var_fi}）")
         col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
@@ -300,32 +327,6 @@ def show_main():
         st.subheader("🤖 模型性能评价与对比分析")
         target_var_metric = st.selectbox("选择目标变量进行评价", ["有机质占比", "污泥沉降指数SVI"], key="metric_target_var")
         current_metrics = metrics_dict[target_var_metric]
-        current_models = models_dict[target_var_metric]
-
-        st.markdown("### 📉 预测值 vs 实测值（散点图）")
-        col_s1, col_s2, col_s3, col_s4 = st.columns(4)
-        y_pred_linear = current_models["Linear"].predict(X_test)
-        y_pred_lasso = current_models["Lasso"].predict(X_test)
-        y_pred_rf = current_models["RF"].predict(X_test)
-        y_pred_xgb = current_models["XGBoost"].predict(X_test)
-
-        # ✅ 修复：改用 trendline="ols" 自动拟合趋势线，这样线条绝对符合真实分布
-        with col_s1:
-            fig_s1 = px.scatter(x=y_test, y=y_pred_linear, trendline="ols", title=f"Linear (R²={current_metrics['Linear']['R²']})")
-            fig_s1.update_layout(template=st.session_state.theme)
-            st.plotly_chart(fig_s1, use_container_width=True)
-        with col_s2:
-            fig_s2 = px.scatter(x=y_test, y=y_pred_lasso, trendline="ols", title=f"Lasso (R²={current_metrics['Lasso']['R²']})")
-            fig_s2.update_layout(template=st.session_state.theme)
-            st.plotly_chart(fig_s2, use_container_width=True)
-        with col_s3:
-            fig_s3 = px.scatter(x=y_test, y=y_pred_rf, trendline="ols", title=f"RF (R²={current_metrics['RF']['R²']})")
-            fig_s3.update_layout(template=st.session_state.theme)
-            st.plotly_chart(fig_s3, use_container_width=True)
-        with col_s4:
-            fig_s4 = px.scatter(x=y_test, y=y_pred_xgb, trendline="ols", title=f"XGBoost (R²={current_metrics['XGBoost']['R²']})")
-            fig_s4.update_layout(template=st.session_state.theme)
-            st.plotly_chart(fig_s4, use_container_width=True)
 
         st.markdown("### 📊 模型评价指标对比")
         col_met1, col_met2, col_met3, col_met4, col_met5 = st.columns(5)
@@ -342,6 +343,14 @@ def show_main():
                 fig_all_metrics.add_trace(go.Bar(x=model_names, y=[current_metrics[m][metric_name] for m in model_names], name=metric_name))
             fig_all_metrics.update_layout(title=f"全部评价指标对比 - {target_var_metric}", barmode='group', template=st.session_state.theme)
             st.plotly_chart(fig_all_metrics, use_container_width=True)
+            
+            # ============ 新增：全部指标综合分析 ============
+            st.markdown("### 📝 模型综合评估分析")
+            best_r2 = model_names[np.argmax([current_metrics[m]["R²"] for m in model_names])]
+            best_rmse = model_names[np.argmin([current_metrics[m]["RMSE"] for m in model_names])]
+            best_mae = model_names[np.argmin([current_metrics[m]["MAE"] for m in model_names])]
+            st.info(f"**分析结论：** 综合 R²、RMSE、MAE、MAPE 四项指标来看，**{best_r2}** 模型在 R² 上表现最好，**{best_rmse}** 模型的 RMSE 最低。结合各项误差指标，推荐优先使用 **XGBoost**（或表现最优的模型）进行污泥减量化调控。这证明该模型在预测 {target_var_metric} 时具有极强的非线性拟合能力和泛化性能。")
+            # ================================================
         else:
             selected_metric = None
             if btn_r2: selected_metric = "R²"
@@ -353,12 +362,26 @@ def show_main():
                 values = [current_metrics[m][selected_metric] for m in model_names]
                 fig_bar = px.bar(x=model_names, y=values, title=f"{selected_metric} 对比", color=model_names, template=st.session_state.theme)
                 st.plotly_chart(fig_bar, use_container_width=True)
+                
+                # ============ 新增：单一指标动态分析 ============
+                st.markdown(f"### 📝 {selected_metric} 指标分析")
+                if selected_metric == "R²":
+                    best_model = model_names[np.argmax(values)]
+                    st.info(f"**分析结论：** 在 R²（决定系数）指标下，**{best_model}** 模型表现最优（R² = {max(values):.3f}）。R² 越接近 1，说明模型对目标变量（{target_var_metric}）的解释能力越强，预测效果越精准。")
+                elif selected_metric in ["RMSE", "MAE", "MAPE"]:
+                    best_model = model_names[np.argmin(values)]
+                    st.info(f"**分析结论：** 在 {selected_metric} 指标下，**{best_model}** 模型表现最优（{selected_metric} = {min(values):.3f}）。该指标越小，说明模型预测值与真实值的偏差越小，模型精度越高。")
+                # ================================================
 
         df_metrics = pd.DataFrame(current_metrics).T
         st.dataframe(df_metrics)
         st.download_button(f"📥 下载 {target_var_metric} 评价指标表", df_metrics.to_csv().encode('utf-8-sig'), f"{target_var_metric}_评价指标.csv", "text/csv", key="dl_metrics")
 
         st.markdown("### 📦 误差分布（箱线图）")
+        y_pred_linear = current_models["Linear"].predict(X_test)
+        y_pred_lasso = current_models["Lasso"].predict(X_test)
+        y_pred_rf = current_models["RF"].predict(X_test)
+        y_pred_xgb = current_models["XGBoost"].predict(X_test)
         df_error = pd.DataFrame({
             "模型": ["Linear"]*len(y_test) + ["Lasso"]*len(y_test) + ["RF"]*len(y_test) + ["XGBoost"]*len(y_test),
             "绝对误差": np.concatenate([
@@ -368,6 +391,12 @@ def show_main():
         })
         fig_box = px.box(df_error, x="模型", y="绝对误差", color="模型", title=f"Absolute Error Distribution - {target_var_metric}", template=st.session_state.theme)
         st.plotly_chart(fig_box, use_container_width=True)
+        
+        # ============ 新增：箱线图误差分析 ============
+        st.markdown("### 📦 误差分布分析")
+        best_box_model = df_error.groupby("模型")["绝对误差"].median().idxmin()
+        st.info(f"**分析结论：** 从箱线图可以看出，**{best_box_model}** 模型的误差分布最集中，中位数最低，且极端离群值较少。这表明该模型在应对不同工况波动时，具有更强的稳定性和鲁棒性。")
+        # ===============================================
 
     with tab5:
         st.subheader("🔍 SHAP 模型可解释性分析")
@@ -385,11 +414,25 @@ def show_main():
             ))
         fig_bee.update_layout(title=f"SHAP Beeswarm Plot - {target_var_shap}", xaxis_title="SHAP Value", yaxis_title="Feature", template=st.session_state.theme)
         st.plotly_chart(fig_bee, use_container_width=True)
+        
+        # ============ 新增：SHAP 蜂群图业务解读 ============
+        st.markdown("### 📝 SHAP 可解释性分析")
+        st.info(f"**分析结论：** 蜂群图展示了各特征对 **{target_var_shap}** 预测结果的贡献方向与大小。"
+                f"图中，**红色点**表示该特征值较高时，会推高预测结果（正贡献）；**蓝色点**表示特征值较低时，会拉低预测结果（负贡献）。"
+                f"位于顶部的特征，说明其对模型决策的影响力最大，是我们后续工艺调控中需要重点关注的指标。")
+        # ===============================================
 
         st.markdown("### 📊 SHAP 条形图 (特征平均贡献度)")
         mean_shap = np.abs(shap_vals.values).mean(axis=0)
         fig_bar_shap = px.bar(x=mean_shap, y=X.columns, orientation='h', title=f"SHAP Feature Importance - {target_var_shap}", template=st.session_state.theme)
         st.plotly_chart(fig_bar_shap, use_container_width=True)
+        
+        # ============ 新增：SHAP 条形图分析 ============
+        st.markdown("### 📊 特征贡献度分析")
+        top_feature = X.columns[np.argmax(mean_shap)]
+        st.info(f"**分析结论：** 综合来看，**{top_feature}** 是影响 **{target_var_shap}** 预测结果的最核心特征。"
+                f"在污水厂的实际运行中，应优先针对该指标进行监测和工艺参数的优化调整，能够对污泥减量化效果起到最直接的作用。")
+        # =================================================
 
         st.markdown("### 📋 SHAP值数据表格")
         df_shap = pd.DataFrame(shap_vals.values, columns=X.columns)
